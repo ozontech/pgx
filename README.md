@@ -1,7 +1,24 @@
-[![](https://godoc.org/github.com/jackc/pgx?status.svg)](https://pkg.go.dev/github.com/jackc/pgx/v4)
-[![Build Status](https://travis-ci.org/jackc/pgx.svg)](https://travis-ci.org/jackc/pgx)
 
 # pgx - PostgreSQL Driver and Toolkit
+
+#### forked from https://github.com/jackc/pgx
+
+## Patch
+
+Added clean up connection logic in `Release` method of pgxpool.Conn.
+If connection status is set to needCleanup driver is trying to clean up 
+connection in background and then return it to the connection pool.
+If cleanup fails, driver will close connection and remove it from pool.
+This is made for performance reasons in bundle with connection pooler
+between client and postgres. In highload systems 99 percent of errors is 
+context cancellation errors. That means that connection is still remaining useful.
+Most of the time it is faster to cleanup connection
+(read all data that is left in there) than to close and open new one. You may
+configure the time at which the connection should be cleared by ConnCleanupTimeout parameter.
+
+Also Connect and ConnectСonfig now returns RetryPool and query is automatically
+retried when it is possible and safe.
+### Description
 
 pgx is a pure Go driver and toolkit for PostgreSQL.
 
@@ -12,8 +29,6 @@ The driver component of pgx can be used alongside the standard `database/sql` pa
 The toolkit component is a related set of packages that implement PostgreSQL functionality such as parsing the wire protocol
 and type mapping between PostgreSQL and Go. These underlying packages can be used to implement alternative drivers,
 proxies, load balancers, logical replication clients, etc.
-
-The current release of `pgx v4` requires Go modules. To use the previous version, checkout and vendor the `v3` branch.
 
 ## Example Usage
 

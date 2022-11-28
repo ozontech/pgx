@@ -402,6 +402,13 @@ func (c *Conn) ConnInfo() *pgtype.ConnInfo { return c.connInfo }
 // Config returns a copy of config that was used to establish this connection.
 func (c *Conn) Config() *ConnConfig { return c.config.Copy() }
 
+// CleanPreparedStatements cleans map of prepared statements
+func (c *Conn) CleanPreparedStatements() {
+	for k := range c.preparedStatements {
+		delete(c.preparedStatements, k)
+	}
+}
+
 // Exec executes sql. sql can be either a prepared statement name or an SQL string. arguments should be referenced
 // positionally from the sql string as $1, $2, etc.
 func (c *Conn) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {

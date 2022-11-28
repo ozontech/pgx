@@ -2,6 +2,7 @@ package pgxpool
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/jackc/pgconn"
@@ -25,6 +26,32 @@ func (c *Conn) Release() {
 	conn := c.Conn()
 	res := c.res
 	c.res = nil
+	pgConn := conn.PgConn()
+
+	if pgConn.NeedsCleanup() {
+		go func() {
+			// if something went wrong fall back to closing connection
+			ctx, cancel := context.WithTimeout(context.Background(), c.p.connCleanupTimeout)
+			defer cancel()
+			if err := pgConn.Cleanup(ctx); err != nil {
+				log.Printf("cleanup connection failed: %s", err.Error())
+				res.Destroy()
+				return
+			}
+
+			// if we `discard all` then we have to clean map
+			// with prepared statements
+			// if we do everything exept `deallocate all`
+			// we shouldnt clean maps
+
+			// conn.StatementCache().Clean()
+			// added just in case, we are using statemet cache with prepared
+			// conn.CleanPreparedStatements()
+			res.Release()
+		}()
+
+		return
+	}
 
 	now := time.Now()
 	if conn.IsClosed() || conn.PgConn().IsBusy() || conn.PgConn().TxStatus() != 'I' || (now.Sub(res.CreationTime()) > c.p.maxConnLifetime) {

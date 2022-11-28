@@ -263,8 +263,8 @@ func TestTransactionRollbackFailsClosesConnection(t *testing.T) {
 
 	err = tx.Rollback(ctx)
 	require.Error(t, err)
-
-	require.True(t, conn.IsClosed())
+	var ctxAlreadyDone *pgconn.СontextAlreadyDoneError
+	require.ErrorAs(t, err, &ctxAlreadyDone)
 }
 
 func TestBeginIsoLevels(t *testing.T) {

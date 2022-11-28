@@ -2,6 +2,7 @@ package pgxpool
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
@@ -20,21 +21,70 @@ func (tx *Tx) BeginFunc(ctx context.Context, f func(pgx.Tx) error) error {
 	return tx.t.BeginFunc(ctx, f)
 }
 
+var ctxAlreadyDone *pgconn.СontextAlreadyDoneError
+
 func (tx *Tx) Commit(ctx context.Context) error {
 	err := tx.t.Commit(ctx)
 	if tx.c != nil {
+		// Force connection cleanup if returned error is a context cancellation.
+		// In this case the connection is recovered with rollback and then
+		// returned to the pool. In other cases connection gets destroyed
+		// in the background if there is an error (inside a Release() method).
+		if err != nil && errors.Is(err, ctx.Err()) {
+			conn := tx.c.Conn().PgConn()
+			// We don't want to clean the socket up if we didn't write anything
+			// in rollback yet and connection is not required to be cleaned up.
+			// Otherwise, we will hang on reading from socket that has
+			// no data being sent back to the server.
+			if errors.As(err, &ctxAlreadyDone) && !conn.NeedsCleanup() {
+				conn.SetCleanupWithoutReset(true)
+			}
+
+			conn.SetNeedsCleanup()
+		}
+
 		tx.c.Release()
 		tx.c = nil
 	}
+
+	// Do not show a cleanup errors to the user.
+	if errors.Is(err, pgconn.ErrLockCleanupConn) {
+		return nil
+	}
+
 	return err
 }
 
 func (tx *Tx) Rollback(ctx context.Context) error {
 	err := tx.t.Rollback(ctx)
 	if tx.c != nil {
+		// Force connection cleanup if returned error is a context cancellation.
+		// In this case the connection is recovered with rollback and then
+		// returned to the pool. In other cases connection gets destroyed
+		// in the background if there is an error (inside a Release() method).
+		if err != nil && errors.Is(err, ctx.Err()) {
+			conn := tx.c.Conn().PgConn()
+
+			// We don't want to clean the socket up if we didn't write anything
+			// in rollback yet and connection is not required to be cleaned up.
+			// Otherwise, we will hang on reading from socket that has
+			// no data being sent back to the server.
+			if errors.As(err, &ctxAlreadyDone) && !conn.NeedsCleanup() {
+				conn.SetCleanupWithoutReset(true)
+			}
+
+			conn.SetNeedsCleanup()
+		}
+
 		tx.c.Release()
 		tx.c = nil
 	}
+
+	// Do not show a cleanup errors to the user.
+	if errors.Is(err, pgconn.ErrLockCleanupConn) {
+		return nil
+	}
+
 	return err
 }
 

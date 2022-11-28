@@ -1,0 +1,18 @@
+version: '3.9'
+services:
+  postgres:
+    image: "postgres:14"
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: "secret"
+      POSTGRES_DB: "pgx_test"
+      POSTGRES_USER: "test"
+
+  postgres-probe:
+    image: "oliosinter/ansible-probe:1.0.0"
+    environment:
+      PROBE_HOST: "postgres"
+      PROBE_PORT: "5432"
+      PROBE_TIMEOUT: "10"
+    command: ["probe.yml"]

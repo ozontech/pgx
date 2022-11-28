@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
-var pool *pgxpool.Pool
+var pool *pgxpool.RetryPool
 
 func main() {
 	var err error

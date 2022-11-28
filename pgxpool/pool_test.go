@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -388,7 +390,7 @@ func TestPoolBackgroundChecksMaxConnIdleTime(t *testing.T) {
 	c, err := db.Acquire(context.Background())
 	require.NoError(t, err)
 	c.Release()
-	time.Sleep(config.HealthCheckPeriod + 50*time.Millisecond)
+	time.Sleep(config.HealthCheckPeriod * 2)
 
 	stats := db.Stat()
 	assert.EqualValues(t, 0, stats.TotalConns())
@@ -799,4 +801,163 @@ func TestIdempotentPoolClose(t *testing.T) {
 
 	// Close the already closed pool.
 	require.NotPanics(t, func() { pool.Close() })
+}
+
+func TestQueryCancelConnectReturnsToPool(t *testing.T) {
+
+	f := func(t *testing.T, p *pgxpool.RetryPool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		r, err := p.Query(ctx, "SELECT * FROM generate_series(2,1256);")
+		require.NoError(t, err)
+
+		time.Sleep(110 * time.Millisecond)
+		for r.Next() {
+			var i int
+			_ = r.Scan(&i)
+		}
+		require.Error(t, r.Err())
+		time.Sleep(time.Millisecond * 50)
+
+		stat := p.Stat()
+		assert.Equal(t, int32(1), stat.TotalConns())
+		assert.Equal(t, int32(1), stat.IdleConns())
+	}
+
+	t.Run("SimpleProto", func(t *testing.T) {
+		p := newSimpleProtoPool(t)
+		defer p.Close()
+
+		f(t, p)
+	})
+
+	t.Run("ExtendedProto", func(t *testing.T) {
+		p := newExtendedQueryProtoPool(t)
+		defer p.Close()
+
+		f(t, p)
+	})
+}
+
+func TestQueryNoPreparedStatementInSession(t *testing.T) {
+	p := newExtendedQueryProtoPool(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	r, err := p.Query(ctx, `SELECT * FROM generate_series(2,($1));`, 1256)
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond * 100)
+	for r.Next() {
+		var i int
+		_ = r.Scan(&i)
+	}
+	require.Error(t, r.Err())
+	time.Sleep(time.Millisecond * 100)
+
+	r, err = p.Query(context.Background(), `SELECT * FROM generate_series(2,($1));`, 1256)
+	for r.Next() {
+		var i int
+		err = r.Scan(&i)
+		require.NoError(t, err)
+	}
+	require.NoError(t, r.Err())
+}
+
+func TestQueryAutomaticPreparedStatementExtendedProtocol(t *testing.T) {
+	// without PreferSimpleProtocol statements will be prepared automatically
+	p := newExtendedQueryProtoPool(t, func(config *pgxpool.Config) {
+		config.MinConns = 10
+		config.MaxConns = 10
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// act
+			rows, err := p.Query(ctx, `SELECT * FROM generate_series(2,($1));`, 1256)
+
+			// assert
+			require.NoError(t, err)
+
+			for rows.Next() {
+				var i int
+				_ = rows.Scan(&i)
+			}
+
+			require.NoError(t, rows.Err())
+		}()
+	}
+
+	wg.Wait()
+
+	// assert
+	assert.Equal(t, int32(10), p.Stat().TotalConns())
+	assert.Equal(t, int32(10), p.Stat().IdleConns())
+}
+
+func TestQueryManualPreparedStatementSimpleProtocol(t *testing.T) {
+	var preparedStatementsCount uint64
+
+	p := newSimpleProtoPool(t, func(config *pgxpool.Config) {
+		config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			atomic.AddUint64(&preparedStatementsCount, 1)
+
+			// prepare statement manually
+			_, err := conn.Prepare(
+				context.Background(),
+				"statement_series",
+				`SELECT * FROM generate_series(2,($1));`,
+			)
+
+			require.NoError(t, err, "unable to prepare a statement")
+			return err
+		}
+
+		config.MinConns = 10
+		config.MaxConns = 10
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// act
+			rows, err := p.Query(ctx, "statement_series", 1256)
+
+			// assert
+			require.NoError(t, err)
+
+			for rows.Next() {
+				var i int
+				_ = rows.Scan(&i)
+			}
+
+			require.NoError(t, rows.Err())
+		}()
+	}
+
+	wg.Wait()
+
+	// assert
+	assert.Equal(t, uint64(10), preparedStatementsCount)
+	assert.Equal(t, int32(10), p.Stat().TotalConns())
+	assert.Equal(t, int32(10), p.Stat().IdleConns())
 }

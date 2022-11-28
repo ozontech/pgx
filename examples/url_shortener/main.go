@@ -12,7 +12,7 @@ import (
 	log "gopkg.in/inconshreveable/log15.v2"
 )
 
-var db *pgxpool.Pool
+var db *pgxpool.RetryPool
 
 func getUrlHandler(w http.ResponseWriter, req *http.Request) {
 	var url string

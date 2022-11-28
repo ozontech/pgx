@@ -226,9 +226,6 @@ func (tx *dbTx) Commit(ctx context.Context) error {
 	commandTag, err := tx.conn.Exec(ctx, "commit")
 	tx.closed = true
 	if err != nil {
-		if tx.conn.PgConn().TxStatus() != 'I' {
-			_ = tx.conn.Close(ctx) // already have error to return
-		}
 		return err
 	}
 	if string(commandTag) == "ROLLBACK" {
@@ -250,8 +247,6 @@ func (tx *dbTx) Rollback(ctx context.Context) error {
 	_, err := tx.conn.Exec(ctx, "rollback")
 	tx.closed = true
 	if err != nil {
-		// A rollback failure leaves the connection in an undefined state
-		tx.conn.die(fmt.Errorf("rollback failed: %w", err))
 		return err
 	}
 

@@ -18,6 +18,7 @@ var defaultMinConns = int32(0)
 var defaultMaxConnLifetime = time.Hour
 var defaultMaxConnIdleTime = time.Minute * 30
 var defaultHealthCheckPeriod = time.Minute
+var defaultConnCleanupTimeout = time.Millisecond * 100
 
 type connResource struct {
 	conn      *pgx.Conn
@@ -69,16 +70,17 @@ func (cr *connResource) getPoolRows(c *Conn, r pgx.Rows) *poolRows {
 }
 
 type Pool struct {
-	p                 *puddle.Pool
-	config            *Config
-	beforeConnect     func(context.Context, *pgx.ConnConfig) error
-	afterConnect      func(context.Context, *pgx.Conn) error
-	beforeAcquire     func(context.Context, *pgx.Conn) bool
-	afterRelease      func(*pgx.Conn) bool
-	minConns          int32
-	maxConnLifetime   time.Duration
-	maxConnIdleTime   time.Duration
-	healthCheckPeriod time.Duration
+	p                  *puddle.Pool
+	config             *Config
+	beforeConnect      func(context.Context, *pgx.ConnConfig) error
+	afterConnect       func(context.Context, *pgx.Conn) error
+	beforeAcquire      func(context.Context, *pgx.Conn) bool
+	afterRelease       func(*pgx.Conn) bool
+	minConns           int32
+	maxConnLifetime    time.Duration
+	maxConnIdleTime    time.Duration
+	healthCheckPeriod  time.Duration
+	connCleanupTimeout time.Duration
 
 	closeOnce sync.Once
 	closeChan chan struct{}
@@ -127,6 +129,9 @@ type Config struct {
 	LazyConnect bool
 
 	createdByParseConfig bool // Used to enforce created by ParseConfig rule.
+
+	// ConnCleanupTimeout is the timeout for cleanup pool connection
+	ConnCleanupTimeout time.Duration
 }
 
 // Copy returns a deep copy of the config that is safe to use and modify.
@@ -141,9 +146,9 @@ func (c *Config) Copy() *Config {
 
 func (c *Config) ConnString() string { return c.ConnConfig.ConnString() }
 
-// Connect creates a new Pool and immediately establishes one connection. ctx can be used to cancel this initial
+// Connect creates a new RetryPool and immediately establishes one connection. ctx can be used to cancel this initial
 // connection. See ParseConfig for information on connString format.
-func Connect(ctx context.Context, connString string) (*Pool, error) {
+func Connect(ctx context.Context, connString string) (*RetryPool, error) {
 	config, err := ParseConfig(connString)
 	if err != nil {
 		return nil, err
@@ -152,9 +157,9 @@ func Connect(ctx context.Context, connString string) (*Pool, error) {
 	return ConnectConfig(ctx, config)
 }
 
-// ConnectConfig creates a new Pool and immediately establishes one connection. ctx can be used to cancel this initial
+// ConnectConfig creates a new RetryPool and immediately establishes one connection. ctx can be used to cancel this initial
 // connection. config must have been created by ParseConfig.
-func ConnectConfig(ctx context.Context, config *Config) (*Pool, error) {
+func ConnectConfig(ctx context.Context, config *Config) (*RetryPool, error) {
 	// Default values are set in ParseConfig. Enforce initial creation by ParseConfig rather than setting defaults from
 	// zero values.
 	if !config.createdByParseConfig {
@@ -162,16 +167,17 @@ func ConnectConfig(ctx context.Context, config *Config) (*Pool, error) {
 	}
 
 	p := &Pool{
-		config:            config,
-		beforeConnect:     config.BeforeConnect,
-		afterConnect:      config.AfterConnect,
-		beforeAcquire:     config.BeforeAcquire,
-		afterRelease:      config.AfterRelease,
-		minConns:          config.MinConns,
-		maxConnLifetime:   config.MaxConnLifetime,
-		maxConnIdleTime:   config.MaxConnIdleTime,
-		healthCheckPeriod: config.HealthCheckPeriod,
-		closeChan:         make(chan struct{}),
+		config:             config,
+		beforeConnect:      config.BeforeConnect,
+		afterConnect:       config.AfterConnect,
+		beforeAcquire:      config.BeforeAcquire,
+		afterRelease:       config.AfterRelease,
+		minConns:           config.MinConns,
+		maxConnLifetime:    config.MaxConnLifetime,
+		maxConnIdleTime:    config.MaxConnIdleTime,
+		healthCheckPeriod:  config.HealthCheckPeriod,
+		connCleanupTimeout: config.ConnCleanupTimeout,
+		closeChan:          make(chan struct{}),
 	}
 
 	p.p = puddle.NewPool(
@@ -232,7 +238,7 @@ func ConnectConfig(ctx context.Context, config *Config) (*Pool, error) {
 		res.Release()
 	}
 
-	return p, nil
+	return wrapInRetryPool(p), nil
 }
 
 // ParseConfig builds a Config from connString. It parses connString with the same behavior as pgx.ParseConfig with the
@@ -321,6 +327,17 @@ func ParseConfig(connString string) (*Config, error) {
 		config.HealthCheckPeriod = d
 	} else {
 		config.HealthCheckPeriod = defaultHealthCheckPeriod
+	}
+
+	if s, ok := config.ConnConfig.Config.RuntimeParams["conn_cleanup_timeout"]; ok {
+		delete(connConfig.Config.RuntimeParams, "conn_cleanup_timeout")
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid conn_cleanup_timeout: %w", err)
+		}
+		config.ConnCleanupTimeout = d
+	} else {
+		config.ConnCleanupTimeout = defaultConnCleanupTimeout
 	}
 
 	return config, nil
