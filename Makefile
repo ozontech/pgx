@@ -1,15 +1,9 @@
 
 PGX_TEST_DATABASE:="host=localhost user=test password=secret dbname=pgx_test"
-PGX_TEST_DATABASE_PROXY="postgres://test:secret@localhost:6432/pgx_test"
-PGX_TEST_PROXY_LOCALHOST="localhost:6432"
-PGX_TEST_PROXY_REMOTEHOST="localhost:5432"
 
 
 test:
 	PGX_TEST_DATABASE=$(PGX_TEST_DATABASE) \
-	PGX_TEST_DATABASE_PROXY=$(PGX_TEST_DATABASE_PROXY) \
-	PGX_TEST_PROXY_LOCALHOST=$(PGX_TEST_PROXY_LOCALHOST) \
-	PGX_TEST_PROXY_REMOTEHOST=$(PGX_TEST_PROXY_REMOTEHOST) \
 	go test -v -cover -race ./...
 
 test-e2e: db-restart db-probe
