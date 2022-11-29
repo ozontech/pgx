@@ -18,7 +18,8 @@ configure the time at which the connection should be cleared by ConnCleanupTimeo
 
 Also Connect and ConnectСonfig now returns RetryPool and query is automatically
 retried when it is possible and safe.
-### Description
+
+## Description
 
 pgx is a pure Go driver and toolkit for PostgreSQL.
 
