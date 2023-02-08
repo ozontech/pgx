@@ -3,6 +3,11 @@
 
 #### forked from https://github.com/jackc/pgx
 
+### This module requires using
+```go
+replace github.com/jackc/pgconn => github.com/ozontech/pgconn v1.12.1-patch.1
+```
+
 ## Patch
 
 Added clean up connection logic in `Release` method of pgxpool.Conn.
