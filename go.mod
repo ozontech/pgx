@@ -21,4 +21,4 @@ require (
 	gopkg.in/inconshreveable/log15.v2 v2.0.0-20180818164646-67afb5ed74ec
 )
 
-replace github.com/jackc/pgconn => gitlab.ozon.ru/external-forks/pgconn v1.12.1-patch.3
+replace github.com/jackc/pgconn => github.com/ozontech/pgconn v1.12.1-patch.1
